@@ -1,15 +1,9 @@
-// ========================================
-// BOT TELEGRAM - ArbiSportsAI
-// Deploy: Railway ou Render
-// ========================================
-
 require('dotenv').config();
 const TelegramBot = require('node-telegram-bot-api');
 const { createClient } = require('@supabase/supabase-js');
 const axios = require('axios');
 const cron = require('node-cron');
 
-// CONFIGURAÇÕES
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_KEY;
@@ -19,10 +13,6 @@ const bot = new TelegramBot(BOT_TOKEN, { polling: true });
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
 console.log('🤖 ArbiSportsAI Bot iniciando...');
-
-// ========================================
-// UTILITÁRIOS
-// ========================================
 
 function formatDate(dateString) {
   const date = new Date(dateString);
@@ -50,10 +40,6 @@ function getSportIcon(sportName) {
   return icons[sportName.toLowerCase().replace(/\s/g, '')] || '🏆';
 }
 
-// ========================================
-// SINCRONIZAÇÃO COM API DEEPBET
-// ========================================
-
 async function syncDeepBetData() {
   console.log('🔄 Iniciando sincronização...');
   const startTime = Date.now();
@@ -73,7 +59,6 @@ async function syncDeepBetData() {
     for (const sb of surebets) {
       currentIds.add(sb.id);
 
-      // Verificar se já existe
       const { data: existing } = await supabase
         .from('surebets')
         .select('id')
@@ -88,43 +73,30 @@ async function syncDeepBetData() {
         event_date: sb.event_date,
         league: sb.league,
         profit_percent: parseFloat(sb.profit),
-        
         bookmaker1_name: sb.bookmaker1?.name,
         outcome1: sb.outcome1,
         odd1: parseFloat(sb.odd1),
         event_link1: sb.event_link1,
         event_link_final1: sb.event_link_final1 || null,
-        
         bookmaker2_name: sb.bookmaker2?.name,
         outcome2: sb.outcome2,
         odd2: parseFloat(sb.odd2),
         event_link2: sb.event_link2,
         event_link_final2: sb.event_link_final2 || null,
-        
         raw_data: sb,
         is_active: true,
         last_seen_at: new Date().toISOString()
       };
 
       if (existing) {
-        // Atualizar existente
-        await supabase
-          .from('surebets')
-          .update(surebetData)
-          .eq('id', sb.id);
+        await supabase.from('surebets').update(surebetData).eq('id', sb.id);
       } else {
-        // Inserir nova
-        await supabase
-          .from('surebets')
-          .insert(surebetData);
-        
+        await supabase.from('surebets').insert(surebetData);
         newCount++;
-        // Enviar notificações para nova surebet
         await sendNotificationsForSurebet(sb.id);
       }
     }
 
-    // Desativar surebets que não vieram na resposta
     const { data: activeSurebets } = await supabase
       .from('surebets')
       .select('id')
@@ -134,17 +106,12 @@ async function syncDeepBetData() {
       if (!currentIds.has(sb.id)) {
         await supabase
           .from('surebets')
-          .update({ 
-            is_active: false, 
-            disappeared_at: new Date().toISOString() 
-          })
+          .update({ is_active: false, disappeared_at: new Date().toISOString() })
           .eq('id', sb.id);
       }
     }
 
     const duration = Date.now() - startTime;
-    
-    // Registrar log
     await supabase.from('sync_logs').insert({
       sync_type: 'surebets',
       success: true,
@@ -158,7 +125,6 @@ async function syncDeepBetData() {
 
   } catch (error) {
     console.error('❌ Erro na sincronização:', error.message);
-    
     await supabase.from('sync_logs').insert({
       sync_type: 'surebets',
       success: false,
@@ -168,13 +134,8 @@ async function syncDeepBetData() {
   }
 }
 
-// ========================================
-// SISTEMA DE NOTIFICAÇÕES
-// ========================================
-
 async function sendNotificationsForSurebet(surebetId) {
   try {
-    // Buscar surebet
     const { data: surebet } = await supabase
       .from('surebets')
       .select('*')
@@ -183,7 +144,6 @@ async function sendNotificationsForSurebet(surebetId) {
 
     if (!surebet) return;
 
-    // Buscar usuários ativos
     const { data: users } = await supabase
       .from('users')
       .select('id, telegram_id, plan, user_filters(*)')
@@ -193,7 +153,6 @@ async function sendNotificationsForSurebet(surebetId) {
 
     for (const user of users || []) {
       try {
-        // Verificar se já enviou
         const { data: alreadySent } = await supabase
           .from('sent_notifications')
           .select('id')
@@ -203,12 +162,10 @@ async function sendNotificationsForSurebet(surebetId) {
 
         if (alreadySent) continue;
 
-        // Verificar filtros
         const filters = user.user_filters?.[0];
         if (!filters || !filters.notifications_enabled) continue;
         if (!matchesFilters(surebet, filters)) continue;
 
-        // Verificar limite do plano
         const todayStart = new Date();
         todayStart.setHours(0, 0, 0, 0);
 
@@ -221,10 +178,7 @@ async function sendNotificationsForSurebet(surebetId) {
         const limits = { free: 10, basic: 100, premium: 999999 };
         if (count >= limits[user.plan]) continue;
 
-        // Enviar mensagem
         await sendSurebetMessage(user.telegram_id, surebet);
-
-        // Registrar envio
         await supabase.from('sent_notifications').insert({
           user_id: user.id,
           surebet_id: surebetId
@@ -236,7 +190,6 @@ async function sendNotificationsForSurebet(surebetId) {
         console.error(`❌ Erro ao enviar para usuário ${user.id}:`, error.message);
       }
 
-      // Delay para evitar rate limit do Telegram
       await new Promise(resolve => setTimeout(resolve, 100));
     }
 
@@ -246,16 +199,13 @@ async function sendNotificationsForSurebet(surebetId) {
 }
 
 function matchesFilters(surebet, filters) {
-  // Lucro
   if (surebet.profit_percent < filters.min_profit_percent) return false;
   if (filters.max_profit_percent && surebet.profit_percent > filters.max_profit_percent) return false;
 
-  // Esportes
   if (filters.sports && filters.sports.length > 0) {
     if (!filters.sports.includes(surebet.sport_name.toLowerCase())) return false;
   }
 
-  // Casas de apostas
   if (filters.bookmakers && filters.bookmakers.length > 0) {
     const hasBookmaker = filters.bookmakers.some(bm => 
       surebet.bookmaker1_name?.toLowerCase().includes(bm.toLowerCase()) ||
@@ -264,7 +214,6 @@ function matchesFilters(surebet, filters) {
     if (!hasBookmaker) return false;
   }
 
-  // Provider
   if (filters.providers && filters.providers.length > 0) {
     if (!filters.providers.includes(surebet.provider)) return false;
   }
@@ -303,15 +252,10 @@ ${icon} <b>${surebet.sport_name}${surebet.league ? ' | ' + surebet.league : ''}<
   });
 }
 
-// ========================================
-// COMANDOS DO BOT
-// ========================================
-
 bot.onText(/\/start/, async (msg) => {
   const chatId = msg.chat.id;
   const userId = msg.from.id;
 
-  // Registrar ou atualizar usuário
   const { data: existing } = await supabase
     .from('users')
     .select('id')
@@ -330,7 +274,6 @@ bot.onText(/\/start/, async (msg) => {
       .select()
       .single();
 
-    // Criar filtros padrão
     await supabase.from('user_filters').insert({
       user_id: newUser.id,
       min_profit_percent: 2.0,
@@ -345,7 +288,6 @@ Seu assistente inteligente para arbitragem esportiva 🚀
 ⚡ <b>Comandos:</b>
 /surebets - Ver surebets ativas
 /calcular - Calculadora de arbitragem
-/meusdados - Ver suas configurações
 /ajuda - Tutorial completo
 
 🎯 Você receberá alertas automáticos quando novas oportunidades surgirem!`;
@@ -394,7 +336,6 @@ bot.onText(/\/surebets/, async (msg) => {
 
   for (const [index, surebet] of surebets.entries()) {
     await sendSurebetMessage(chatId, surebet);
-    
     if (index < surebets.length - 1) {
       await new Promise(resolve => setTimeout(resolve, 1000));
     }
@@ -402,8 +343,6 @@ bot.onText(/\/surebets/, async (msg) => {
 });
 
 bot.onText(/\/calcular/, async (msg) => {
-  const chatId = msg.chat.id;
-  
   const message = `🔢 <b>Calculadora de Arbitragem</b>
 
 Envie no formato:
@@ -417,7 +356,7 @@ Onde:
 - 1.85 = primeira odd
 - 2.15 = segunda odd`;
 
-  await bot.sendMessage(chatId, message, { parse_mode: 'HTML' });
+  await bot.sendMessage(msg.chat.id, message, { parse_mode: 'HTML' });
 });
 
 bot.on('message', async (msg) => {
@@ -458,41 +397,19 @@ Apostar nos dois resultados possíveis em casas diferentes, garantindo lucro ind
 3. Aposta o valor calculado na Casa 2
 4. Lucro garantido! 💰
 
-<b>Exemplo:</b>
-Jogo: Time A vs Time B
-Casa 1: Time A vence (odd 1.85)
-Casa 2: Time B vence (odd 2.15)
-Lucro: 4.5%
-
-Com R$ 100:
-- Aposte R$ 53.66 no Time A
-- Aposte R$ 46.34 no Time B
-- Lucro garantido: R$ 4.50
-
 <b>Dicas:</b>
 ✅ Cadastre-se nas casas indicadas
 ✅ Tenha saldo nas duas casas
 ✅ Aposte rápido (odds mudam)
-✅ Use nossa calculadora
-
-Dúvidas? Fale com suporte: /suporte`;
+✅ Use nossa calculadora`;
 
   await bot.sendMessage(msg.chat.id, message, { parse_mode: 'HTML' });
 });
 
-// ========================================
-// AGENDAMENTO
-// ========================================
-
-// Sincronizar a cada 2 minutos
 cron.schedule('*/2 * * * *', () => {
   console.log('⏰ Executando sincronização agendada...');
   syncDeepBetData();
 });
-
-// ========================================
-// INICIALIZAÇÃO
-// ========================================
 
 (async () => {
   try {
@@ -505,7 +422,6 @@ cron.schedule('*/2 * * * *', () => {
   }
 })();
 
-// Tratamento de erros
 bot.on('polling_error', (error) => {
   console.error('❌ Erro de polling:', error.message);
 });
@@ -513,15 +429,3 @@ bot.on('polling_error', (error) => {
 process.on('unhandledRejection', (error) => {
   console.error('❌ Erro não tratado:', error);
 });
-```
-
----
-
-## 2️⃣ Estrutura completa do repositório:
-
-Seu repositório GitHub deve ter **3 arquivos**:
-```
-arbisportsai-bot/
-├── package.json
-├── bot.js
-└── .gitignore
